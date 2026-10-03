@@ -1,32 +1,46 @@
-# KNN — Curse of Dimensionality on Sonar Dataset
+# Classifier & Ensemble — Trees to Stacking on Telco Churn
 
-K-Nearest Neighbors applied to the UCI Sonar dataset (208 samples, 60 features, 2 classes: mine vs rock) to study distance metrics, hyperparameter selection, and the effect of dimensionality reduction.
+Progression from a single decision tree through bagged trees (Random Forest), boosted trees (XGBoost), and a stacked ensemble — on the Telco Customer Churn dataset.
+
+## Dataset
+- `fetch_openml('telco-customer-churn', version=1)`
+- 7,032 rows × 30 raw features (categorical + numeric mix; ID dropped)
+- Target: binary Churn, imbalance ~27% positive
+- Preprocessing: `TotalCharges` coerced to numeric, nulls dropped, categoricals one-hot encoded (drop_first=True)
 
 ## Approach
-1. Stratified train/test split
-2. Baseline KNN (k=5) on raw features, with and without standardization
-3. k-sweep (1–30) to observe bias-variance behavior
-4. Distance metric comparison: Euclidean / Manhattan / Cosine
-5. PCA sweep (2–50 components) → KNN accuracy at each dimensionality
-6. Metric comparison again after PCA to 15D
+1. Stratified 80/20 split
+2. Decision Tree baseline — unpruned (max overfit) and depth-limited (variance-controlled); `max_depth` swept 1–20
+3. Random Forest — 300 trees, default feature subsampling
+4. XGBoost — 500 rounds, lr=0.05, early stopping on validation log-loss
+5. Stacking — RF + XGB + scaled Logistic Regression → Logistic Regression meta-learner, `cv=5` for out-of-fold meta-features
+6. Confusion matrices + per-class classification reports across all models
 
 ## Results
-- Raw 60D accuracy: **0.7381** (identical with/without scaling — Sonar is pre-normalized)
-- Peak accuracy: **0.8571 at 15 PCA components** (83.3% variance retained)
-- Beyond 20 components, accuracy **degrades below the raw baseline** — the trailing variance directions are noise
-- Metric behavior on raw 60D: Manhattan and Cosine beat Euclidean (0.7619 vs 0.7381)
-- After PCA to 15D: Euclidean and Cosine converge (both 0.8571); Manhattan trails (0.8095)
+
+### Test accuracy
+| Model | Train | Test | Notes |
+|---|---|---|---|
+| Tree (unpruned, depth 24) | 0.9988 | 0.7264 | Pure memorization |
+| Tree (depth 5) | 0.8046 | 0.7811 | Bias-variance balanced |
+| Random Forest (300) | 0.9988 | 0.7868 | Variance cancels |
+| XGBoost (early stop @ 66) | 0.8284 | 0.7953 | Best single model |
+| **Stack (RF + XGB + LR)** | **0.8423** | **0.8010** | Best overall |
+
+### Churn class performance (the class that matters)
+| Model | Churn Precision | Churn Recall | Churn F1 |
+|---|---|---|---|
+| Tree (depth 5) | 0.605 | 0.508 | 0.552 |
+| Random Forest | 0.625 | 0.495 | 0.552 |
+| XGBoost | 0.643 | 0.516 | 0.573 |
+| **Stack (RF + XGB + LR)** | **0.649** | **0.548** | **0.594** |
 
 ## Key Observations
-- **Curse of dimensionality is directly visible**: accuracy peaks at intermediate dimensionality, then falls as noisy directions are reintroduced.
-- **PCA is Euclidean by construction**: it helps L2-based metrics most. Manhattan benefits less because PCA's objective isn't aligned with its geometry.
-- **Standardization is diagnostic, not automatic**: pre-normalized data gains nothing from it.
-- **Variance ≠ usefulness** (same lesson as the PCA project): the last 15% of variance actively hurts KNN.
+- **Accuracy is a misleading metric here.** Dummy baseline (always predict "No Churn") scores ~0.73. Every model sits only 5–7 points above a classifier that does nothing. The metric that matters is **Churn recall** — every model misses ~45–50% of churners.
+- **Unpruned tree demonstrates overfitting cleanly:** train 0.9988 / test 0.7264. Constraining depth to 5 recovers ~5 test points.
+- **Bagging vs. boosting:** RF plateaus and never overfits (averaging cancels variance); XGBoost overfits without early stopping — best iteration at 66, well before the 500-round cap.
+- **Stacking gains are marginal (+0.6% over XGBoost).** RF and XGB are correlated tree-based learners sharing the same features. The tiny gain comes from LR contributing a different error profile — not from the meta-learner being clever.
+- **Scaling matters only for LR.** Trees split on rank order and ignore scale. The LR base learner and meta-learner were wrapped in `StandardScaler` pipelines to resolve convergence issues; this moved stack accuracy from 0.8003 → 0.8010.
 
 ## Stack
-`Python` · `scikit-learn` · `numpy` · `pandas` · `matplotlib`
-
-## Run
-```bash
-pip install numpy pandas matplotlib scikit-learn
-python Sonar.py
+scikit-learn · xgboost · numpy · pandas · matplotlib
